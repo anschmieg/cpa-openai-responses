@@ -20,6 +20,7 @@ import (
 const (
 	provider = "openai-responses"
 	format   = "openai-response"
+	version  = "0.3.0"
 )
 
 type config struct {
@@ -174,7 +175,7 @@ func (p *plugin) dispatch(method string, data []byte) (any, error) {
 		return map[string]any{
 			"schema_version": 10,
 			"metadata": map[string]any{
-				"Name": provider, "Version": "0.2.0", "Author": "Tokligence",
+				"Name": provider, "Version": version, "Author": "Tokligence",
 				"GitHubRepository": "https://github.com/anschmieg/cpa-openai-responses",
 				"ConfigFields": []map[string]string{
 					{"Name": "base_url", "Type": "string", "Description": "HTTPS API base URL including the API prefix. Defaults to https://api.openai.com/v1."},

@@ -66,8 +66,7 @@ revoking the old key. Prior configuration backups may still contain the old key.
 Build on the target Linux architecture with cgo and a C compiler:
 
 ```sh
-cd plugins/openai-responses
-go build -buildmode=c-shared -o /tmp/openai-responses.so .
+go build -trimpath -buildvcs=false -buildmode=c-shared -o /tmp/openai-responses.so .
 ```
 
 Install the library as `openai-responses.so` in CPA's configured plugin
@@ -92,13 +91,19 @@ plugins:
 ### Model discovery
 
 With `models` omitted or empty, the plugin fetches `/models` after a key is
-configured and CPA next registers or refreshes the provider. The refresh interval is shared by all listed providers. Append
-`openai-responses` to any existing refresh provider list rather than replacing it.
+configured and CPA next registers or refreshes the provider. On hosts with
+plugin model refresh support, the interval is shared by all listed providers.
+Append `openai-responses` to the existing refresh provider list. On other
+hosts, a CPA restart triggers registration.
 The catalog does not report Responses compatibility, so
 discovery exposes known text model families and skips dedicated audio, image,
 realtime, and other specialized variants. Upstream catalog failures fail closed
 until the next successful refresh. To pin specific IDs or use a custom model
 family, set `models` to a nonempty list; pinned mode does not query `/models`.
+
+Tokligence CPA builds with `models.canonical-only` enabled currently omit
+static plugin models from discovery and reject explicit requests before
+dispatch. This requires a host-side routing fix.
 
 `base_url` includes the API prefix, typically `/v1`. Use a trusted HTTPS
 upstream. The host owns retry, streaming bootstrap, and response-header policy.
