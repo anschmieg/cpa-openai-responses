@@ -1,10 +1,12 @@
 """Run the built plugin through a local CPA v8 host and HTTPS mock upstream."""
 
 import argparse
+import base64
 import http.client
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import ssl
@@ -119,6 +121,7 @@ plugins:
 """)
     env = dict(os.environ, SSL_CERT_FILE=str(certificate))
     env.pop("OPENAI_RESPONSES_API_KEY", None)
+    env.pop("OPENAI_RESPONSES_STORAGE_KEY", None)
     env = {k: v for k, v in env.items() if k.lower() not in {"http_proxy", "https_proxy", "all_proxy"}}
 
     def request(method, path, body=None, key="mock-downstream-a", **headers):
@@ -170,11 +173,11 @@ plugins:
                 management_path = "/v8/management/config/plugins/configs/openai-responses"
                 assert request("GET", management_path)[0] == 401
                 status, body = request("GET", "/v8/management/plugins", key="mock-management-key")
-                assert status == 200 and '"name":"api_key"' in body, (status, body)
+                assert status == 200 and '"name":"api_key"' not in body, (status, body)
                 status, body = request("GET", management_path, key="mock-management-key")
                 assert status == 200, (status, body)
                 updated = json.loads(body)
-                updated.update(api_key=KEY, base_url=f"https://127.0.0.1:{upstream.server_port}/v1",
+                updated.update(base_url=f"https://127.0.0.1:{upstream.server_port}/v1",
                                models=["gpt-test"], state_file=str(root / "opaque.db"))
                 assert request("PUT", management_path, updated)[0] == 401
                 status, body = request("PUT", management_path, updated, key="mock-management-key")
@@ -184,7 +187,30 @@ plugins:
                         break
                     time.sleep(0.05)
                 else:
-                    raise AssertionError("saving the project key did not publish the model")
+                    raise AssertionError("saving the model list did not publish the model")
+                credential_path = "/v0/management/plugins/openai-responses/credential"
+                assert request("GET", credential_path)[0] == 401
+                status, page = request("GET", credential_path, key="mock-management-key")
+                assert status == 200 and 'type="password"' in page and KEY not in page, (status, page)
+                public = re.search(r"atob\('([A-Za-z0-9+/=]+)'\)", page)
+                assert public, page
+                form_public_key = root / "credential-form-public.der"
+                form_public_key.write_bytes(base64.b64decode(public[1]))
+                encrypted = subprocess.run(
+                    ["openssl", "pkeyutl", "-pubin", "-keyform", "DER", "-inkey", str(form_public_key),
+                     "-encrypt", "-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256"],
+                    input=KEY.encode(), check=True, capture_output=True,
+                ).stdout
+                submission = json.dumps(base64.b64encode(encrypted).decode())
+                assert request("PUT", credential_path, submission)[0] == 401
+                assert request("PUT", credential_path, submission, key="mock-management-key",
+                               **{"Sec-Fetch-Site": "cross-site"})[0] == 404
+                assert request("PUT", credential_path, submission, key="mock-management-key")[0] == 204
+                assert KEY not in config.read_text()
+                assert KEY.encode() not in (root / "opaque.db").read_bytes()
+                assert (root / "opaque.db.key").stat().st_mode & 0o777 == 0o600
+                status, page = request("GET", credential_path, key="mock-management-key")
+                assert status == 200 and "A project key is configured." in page and KEY not in page
                 original = ('{ "model": "' + MODEL + '", "input": "hi", '
                             '"previous_response_id": "resp_previous", "store": false, '
                             '"prompt_cache_key": "stable", "prompt_cache_retention": "24h", '

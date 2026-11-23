@@ -3,8 +3,7 @@
 This CPA v8 plugin publishes explicitly configured models under
 `openai-responses/<model>`. It sends POST requests directly to the upstream
 `/responses` and `/responses/compact` endpoints over HTTPS. It supports
-buffered Responses and SSE. The project key is configured in CPAMC independently of the ChatGPT OAuth
-credentials.
+buffered Responses and SSE. The project key is entered through the **OpenAI Responses Key** page in CPAMC, independently of the ChatGPT OAuth credentials.
 
 The plugin preserves the original Responses JSON and patches only the selected
 upstream model and stream flag when needed. Hosted tools, structured output,
@@ -34,46 +33,28 @@ For CPA's Plugin Store, add this registry URL under `plugins.store-sources`:
 https://raw.githubusercontent.com/anschmieg/cpa-openai-responses/main/registry.json
 ```
 
-In CPAMC, open **Plugins → Store** and install **OpenAI Responses**. The
-registry supplies a checksum-verified Linux ARM64 build. Newly installed
-instances register with no models until a key, persistent state file, and
-model list are configured.
+In CPAMC, save the state file and models under **Plugins → openai-responses →
+Configure**. Then open **OpenAI Responses Key** in the sidebar of the Tokligence
+panel and enter the project key in its password field. The form sends the key
+under an ephemeral RSA public key so request logs at the `/admin` alias do not
+capture the plaintext. The page and the config API never return the newly
+entered key.
 
-### Build manually
+CPA stores the key with AES-256-GCM in the plugin database. For production, set
+`OPENAI_RESPONSES_STORAGE_KEY` to a base64-encoded 32-byte random value in the
+Coolify secret environment before adding the first key. Otherwise the plugin
+creates `<state_file>.key` as a mode-`0600` file. The key file and database must
+both be kept private. Keep the encryption key separate from database backups.
+A headless install can still use `api_key_env` (default `OPENAI_RESPONSES_API_KEY`).
+The encrypted credential takes precedence for its configured upstream URL.
 
-Build on the target Linux architecture with cgo and a C compiler:
+### Upgrade from v0.1.0
 
-```sh
-cd plugins/openai-responses
-go build -buildmode=c-shared -o /tmp/openai-responses.so .
-```
-
-Install the library as `openai-responses.so` in CPA's configured plugin
-directory. Choose a writable state file under the persistent mount with an
-existing parent directory. Restart CPA to replace the shared library.
-
-Merge these entries into the native v8 config and list exact authorized
-upstream model IDs:
-
-```yaml
-plugins:
-  enabled: true
-  configs:
-    openai-responses:
-      enabled: true
-      base_url: https://api.openai.com/v1
-      state_file: /home/agent/cliproxy-staging/state/openai-responses.db
-      models:
-        - gpt-5.4
-```
-
-In CPAMC, open **Plugins → openai-responses → Configure** and save the project
-API key in `api_key`, along with the state file and models. The patched Tokligence
-CPAMC v1.29.1 panel masks this field. CPA stores the key in the protected provider
-configuration and reloads the plugin. It publishes the configured models once
-a key is present. If you configure an environment key for a headless install,
-`api_key_env` selects its name and defaults to `OPENAI_RESPONSES_API_KEY`.
-The CPAMC value takes precedence when both are present.
+The previous `api_key` field was stored in plain text in CPA YAML. On first load,
+v0.2.0 encrypts the legacy value to preserve active routes. Remove the plaintext
+`api_key` entry from CPA Configuration → Source after updating the plugin, then
+create a new OpenAI project key and save it in **OpenAI Responses Key** before
+revoking the old key. Prior configuration backups may still contain the old key.
 
 `base_url` includes the API prefix, typically `/v1`. Use a trusted HTTPS
 upstream. The host owns retry, streaming bootstrap, and response-header policy.
@@ -94,6 +75,6 @@ python3 testing/mock_host.py --binary /path/to/cli-proxy-api \
 ```
 
 The test starts a fresh CPA instance on loopback and uses a local HTTPS mock.
-It checks an authenticated CPAMC-style key update and hot reload, discovery,
+It checks the authenticated password form, encrypted key persistence, hot reload, discovery,
 request bytes and cache controls, signature rejection and caller isolation,
 SSE, compaction, errors, and replay after restart.

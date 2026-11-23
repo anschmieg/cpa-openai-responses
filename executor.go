@@ -106,7 +106,7 @@ func (p *plugin) prepare(req executorRequest, stream bool) (upstreamRequest, pro
 	headers := http.Header{
 		"Authorization": {"Bearer " + cfg.apiKey},
 		"Content-Type":  {"application/json"},
-		"User-Agent":    {"nothing-gateway-openai-responses/0.1.0"},
+		"User-Agent":    {"nothing-gateway-openai-responses/0.2.0"},
 	}
 	if stream {
 		headers.Set("Accept", "text/event-stream")

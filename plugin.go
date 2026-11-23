@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,11 +24,12 @@ const (
 
 type config struct {
 	BaseURL   string   `yaml:"base_url"`
-	APIKey    string   `yaml:"api_key"`
+	LegacyKey string   `yaml:"api_key"`
 	APIKeyEnv string   `yaml:"api_key_env"`
 	StateFile string   `yaml:"state_file"`
 	Models    []string `yaml:"models"`
 
+	legacyKey bool
 	apiKey    string
 	namespace [32]byte
 }
@@ -39,6 +39,7 @@ type plugin struct {
 	config config
 	db     *bolt.DB
 	call   func(string, []byte) ([]byte, error)
+	admin  credentialForm
 }
 
 var (
@@ -64,22 +65,20 @@ func (p *plugin) configure(data []byte) error {
 	if !envName.MatchString(cfg.APIKeyEnv) {
 		return errors.New("api_key_env must name an environment variable")
 	}
-	cfg.apiKey = strings.TrimSpace(cfg.APIKey)
-	cfg.APIKey = ""
-	if cfg.apiKey == "" {
-		cfg.apiKey = strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
+	legacyKey := strings.TrimSpace(cfg.LegacyKey)
+	cfg.LegacyKey = ""
+	cfg.legacyKey = legacyKey != ""
+	envKey := strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
+	if envKey != "" && !validKey(envKey) {
+		return errors.New("invalid OpenAI project API key environment value")
 	}
-	if strings.ContainsAny(cfg.apiKey, " \r\n\t") {
-		return errors.New("invalid OpenAI project API key")
-	}
-	cfg.namespace = sha256.Sum256([]byte(cfg.BaseURL + "\x00" + cfg.apiKey))
 	if cfg.StateFile != "" && !filepath.IsAbs(cfg.StateFile) {
 		return errors.New("state_file must be an absolute path")
 	}
 	if cfg.StateFile != "" {
 		cfg.StateFile = filepath.Clean(cfg.StateFile)
 	}
-	if cfg.apiKey != "" && (cfg.StateFile == "" || len(cfg.Models) == 0) {
+	if (envKey != "" || legacyKey != "") && (cfg.StateFile == "" || len(cfg.Models) == 0) {
 		return errors.New("configure a state file and at least one upstream model before adding a key")
 	}
 	seen := make(map[string]bool, len(cfg.Models))
@@ -92,21 +91,42 @@ func (p *plugin) configure(data []byte) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if cfg.apiKey == "" {
-		if p.db != nil {
-			_ = p.db.Close()
-			p.db = nil
-		}
-	} else if p.db == nil || p.config.StateFile != cfg.StateFile {
-		db, err := bolt.Open(cfg.StateFile, 0600, &bolt.Options{Timeout: time.Second})
+	db := p.db
+	if cfg.StateFile == "" {
+		db = nil
+	} else if db == nil || p.config.StateFile != cfg.StateFile {
+		var err error
+		db, err = bolt.Open(cfg.StateFile, 0600, &bolt.Options{Timeout: time.Second})
 		if err != nil {
 			return fmt.Errorf("open provenance database: %w", err)
 		}
-		if p.db != nil {
-			_ = p.db.Close()
-		}
-		p.db = db
 	}
+	if db != nil {
+		key, stored, err := readCredential(db, cfg)
+		if err != nil {
+			if db != p.db {
+				_ = db.Close()
+			}
+			return err
+		}
+		if !stored && envKey == "" && validKey(legacyKey) {
+			if err := writeCredential(db, cfg, legacyKey); err != nil {
+				if db != p.db {
+					_ = db.Close()
+				}
+				return errors.New("could not encrypt the legacy project credential")
+			}
+			key = legacyKey
+		}
+		if key == "" {
+			key = envKey
+		}
+		cfg.setKey(key)
+	}
+	if p.db != nil && p.db != db {
+		_ = p.db.Close()
+	}
+	p.db = db
 	p.config = cfg
 	return nil
 }
@@ -153,10 +173,9 @@ func (p *plugin) dispatch(method string, data []byte) (any, error) {
 		return map[string]any{
 			"schema_version": 10,
 			"metadata": map[string]any{
-				"Name": provider, "Version": "0.1.0", "Author": "Tokligence",
+				"Name": provider, "Version": "0.2.0", "Author": "Tokligence",
 				"GitHubRepository": "https://github.com/anschmieg/cpa-openai-responses",
 				"ConfigFields": []map[string]string{
-					{"Name": "api_key", "Type": "string", "Description": "OpenAI project API key."},
 					{"Name": "base_url", "Type": "string", "Description": "HTTPS API base URL including the API prefix. Defaults to https://api.openai.com/v1."},
 					{"Name": "models", "Type": "array", "Description": "Exact upstream model IDs to expose."},
 					{"Name": "state_file", "Type": "string", "Description": "Absolute path to the persistent continuation database."},
@@ -164,6 +183,7 @@ func (p *plugin) dispatch(method string, data []byte) (any, error) {
 			},
 			"capabilities": map[string]any{
 				"model_registrar":         true,
+				"management_api":          true,
 				"model_router":            true,
 				"executor":                true,
 				"executor_model_scope":    "static",
@@ -177,6 +197,10 @@ func (p *plugin) dispatch(method string, data []byte) (any, error) {
 	case "plugin.shutdown":
 		p.shutdown()
 		return struct{}{}, nil
+	case "management.register":
+		return credentialRoutes(), nil
+	case "management.handle":
+		return p.handleCredential(data)
 	case "executor.identifier":
 		return map[string]string{"identifier": provider}, nil
 	case "model.route":
@@ -193,7 +217,7 @@ func (p *plugin) dispatch(method string, data []byte) (any, error) {
 		p.mu.RLock()
 		defer p.mu.RUnlock()
 		models := make([]map[string]any, 0, len(p.config.Models))
-		if p.config.apiKey == "" {
+		if p.db == nil {
 			return map[string]any{"Provider": provider, "Models": models}, nil
 		}
 		for _, model := range p.config.Models {
