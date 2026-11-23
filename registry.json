@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "plugins": [
+    {
+      "id": "openai-responses",
+      "name": "OpenAI Responses",
+      "description": "Direct OpenAI Responses and compaction with request and cache controls preserved.",
+      "author": "Tokligence",
+      "version": "0.1.0",
+      "repository": "https://github.com/anschmieg/cpa-openai-responses",
+      "tags": [
+        "openai",
+        "responses"
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/anschmieg/cpa-openai-responses/releases/download/v0.1.0/openai-responses-0.1.0-linux-arm64.zip",
+            "sha256": "19a0a7d1ed836c3c090f2da7c3c5a15ceddbfbc5509e5dd0f0a6097ffa19cbdd",
+            "size": 3717677
+          }
+        ]
+      }
+    }
+  ]
+}
