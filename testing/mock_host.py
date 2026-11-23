@@ -16,7 +16,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-MODEL = "openai-responses/gpt-test"
+UPSTREAM_MODEL = "gpt-4.1-mini"
+MODEL = "openai-responses/" + UPSTREAM_MODEL
 TOKEN = "gAAAA-openai-api-test"
 STREAM_TOKEN = "gAAAA-openai-stream-test"
 COMPACT_TOKEN = "gAAAA-openai-compact-test"
@@ -34,6 +35,12 @@ def run(binary, library, root):
     calls = []
 
     class Upstream(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != "/v1/models" or self.headers.get("Authorization") != f"Bearer {KEY}":
+                self.reply(403, {"error": "unexpected catalog request"})
+                return
+            self.reply(200, {"data": [{"id": UPSTREAM_MODEL}, {"id": "text-embedding-3-large"}]})
+
         def do_POST(self):
             raw = self.rfile.read(int(self.headers["Content-Length"]))
             body = json.loads(raw)
@@ -178,16 +185,10 @@ plugins:
                 assert status == 200, (status, body)
                 updated = json.loads(body)
                 updated.update(base_url=f"https://127.0.0.1:{upstream.server_port}/v1",
-                               models=["gpt-test"], state_file=str(root / "opaque.db"))
+                               state_file=str(root / "opaque.db"))
                 assert request("PUT", management_path, updated)[0] == 401
                 status, body = request("PUT", management_path, updated, key="mock-management-key")
                 assert status == 200, (status, body)
-                for _ in range(100):
-                    if MODEL in request("GET", "/v1/models")[1]:
-                        break
-                    time.sleep(0.05)
-                else:
-                    raise AssertionError("saving the model list did not publish the model")
                 credential_path = "/v0/management/plugins/openai-responses/credential"
                 assert request("GET", credential_path)[0] == 401
                 status, page = request("GET", credential_path, key="mock-management-key")
@@ -211,6 +212,10 @@ plugins:
                 assert (root / "opaque.db.key").stat().st_mode & 0o777 == 0o600
                 status, page = request("GET", credential_path, key="mock-management-key")
                 assert status == 200 and "A project key is configured." in page and KEY not in page
+            finally:
+                stop(host)
+            host = start(log)
+            try:
                 original = ('{ "model": "' + MODEL + '", "input": "hi", '
                             '"previous_response_id": "resp_previous", "store": false, '
                             '"prompt_cache_key": "stable", "prompt_cache_retention": "24h", '
@@ -223,7 +228,7 @@ plugins:
                 assert json.loads(result)["usage"]["input_tokens_details"]["cached_tokens"] == 1500
                 path, headers, raw, _ = calls[-1]
                 assert path == "/v1/responses"
-                assert raw == original.replace(MODEL, "gpt-test", 1).encode()
+                assert raw == original.replace(MODEL, UPSTREAM_MODEL, 1).encode()
                 assert headers["Authorization"] == f"Bearer {KEY}"
                 assert "private" not in str(headers)
                 count = len(calls)

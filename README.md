@@ -33,7 +33,12 @@ For CPA's Plugin Store, add this registry URL under `plugins.store-sources`:
 https://raw.githubusercontent.com/anschmieg/cpa-openai-responses/main/registry.json
 ```
 
-In CPAMC, save the state file and models under **Plugins → openai-responses →
+In CPAMC, open **Plugins → Store** and install **OpenAI Responses**. The
+registry supplies a checksum-verified Linux ARM64 build. Newly installed
+instances register with no models until a key and persistent state file are
+configured.
+
+In CPAMC, save the state file and optional model allowlist under **Plugins → openai-responses →
 Configure**. Then open **OpenAI Responses Key** in the sidebar of the Tokligence
 panel and enter the project key in its password field. The form sends the key
 under an ephemeral RSA public key so request logs at the `/admin` alias do not
@@ -55,6 +60,45 @@ v0.2.0 encrypts the legacy value to preserve active routes. Remove the plaintext
 `api_key` entry from CPA Configuration → Source after updating the plugin, then
 create a new OpenAI project key and save it in **OpenAI Responses Key** before
 revoking the old key. Prior configuration backups may still contain the old key.
+
+### Build manually
+
+Build on the target Linux architecture with cgo and a C compiler:
+
+```sh
+cd plugins/openai-responses
+go build -buildmode=c-shared -o /tmp/openai-responses.so .
+```
+
+Install the library as `openai-responses.so` in CPA's configured plugin
+directory. Choose a writable state file under the persistent mount with an
+existing parent directory. Restart CPA to replace the shared library.
+
+Merge these entries into the native v8 config:
+
+```yaml
+plugins:
+  enabled: true
+  model-refresh-seconds: 3600
+  model-refresh-providers:
+    - openai-responses
+  configs:
+    openai-responses:
+      enabled: true
+      base_url: https://api.openai.com/v1
+      state_file: /home/agent/cliproxy-staging/state/openai-responses.db
+```
+
+### Model discovery
+
+With `models` omitted or empty, the plugin fetches `/models` after a key is
+configured and CPA next registers or refreshes the provider. The refresh interval is shared by all listed providers. Append
+`openai-responses` to any existing refresh provider list rather than replacing it.
+The catalog does not report Responses compatibility, so
+discovery exposes known text model families and skips dedicated audio, image,
+realtime, and other specialized variants. Upstream catalog failures fail closed
+until the next successful refresh. To pin specific IDs or use a custom model
+family, set `models` to a nonempty list; pinned mode does not query `/models`.
 
 `base_url` includes the API prefix, typically `/v1`. Use a trusted HTTPS
 upstream. The host owns retry, streaming bootstrap, and response-header policy.

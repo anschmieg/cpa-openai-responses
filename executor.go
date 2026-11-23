@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -80,8 +79,8 @@ func (p *plugin) prepare(req executorRequest, stream bool) (upstreamRequest, pro
 		return upstreamRequest{}, provenanceScope{}, rejected(503, "provider_unconfigured", "the Responses provider has no project API key")
 	}
 	model, prefixed := strings.CutPrefix(req.Model, provider+"/")
-	if !prefixed || !slices.Contains(cfg.Models, model) {
-		return upstreamRequest{}, provenanceScope{}, rejected(404, "model_not_found", "model is not configured on the Responses provider")
+	if !prefixed || !p.catalog.contains(cfg, model) {
+		return upstreamRequest{}, provenanceScope{}, rejected(404, "model_not_found", "model is not exposed by the Responses provider")
 	}
 	root := gjson.ParseBytes(req.OriginalRequest)
 	if !json.Valid(req.OriginalRequest) || !root.IsObject() {

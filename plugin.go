@@ -35,11 +35,12 @@ type config struct {
 }
 
 type plugin struct {
-	mu     sync.RWMutex
-	config config
-	db     *bolt.DB
-	call   func(string, []byte) ([]byte, error)
-	admin  credentialForm
+	mu      sync.RWMutex
+	config  config
+	db      *bolt.DB
+	call    func(string, []byte) ([]byte, error)
+	catalog modelCatalog
+	admin   credentialForm
 }
 
 var (
@@ -78,8 +79,8 @@ func (p *plugin) configure(data []byte) error {
 	if cfg.StateFile != "" {
 		cfg.StateFile = filepath.Clean(cfg.StateFile)
 	}
-	if (envKey != "" || legacyKey != "") && (cfg.StateFile == "" || len(cfg.Models) == 0) {
-		return errors.New("configure a state file and at least one upstream model before adding a key")
+	if (envKey != "" || legacyKey != "") && cfg.StateFile == "" {
+		return errors.New("configure a state file before adding a key")
 	}
 	seen := make(map[string]bool, len(cfg.Models))
 	for _, model := range cfg.Models {
@@ -177,7 +178,7 @@ func (p *plugin) dispatch(method string, data []byte) (any, error) {
 				"GitHubRepository": "https://github.com/anschmieg/cpa-openai-responses",
 				"ConfigFields": []map[string]string{
 					{"Name": "base_url", "Type": "string", "Description": "HTTPS API base URL including the API prefix. Defaults to https://api.openai.com/v1."},
-					{"Name": "models", "Type": "array", "Description": "Exact upstream model IDs to expose."},
+					{"Name": "models", "Type": "array", "Description": "Optional exact model allowlist. Omit to discover models from the upstream API."},
 					{"Name": "state_file", "Type": "string", "Description": "Absolute path to the persistent continuation database."},
 				},
 			},
@@ -216,11 +217,15 @@ func (p *plugin) dispatch(method string, data []byte) (any, error) {
 	case "model.register":
 		p.mu.RLock()
 		defer p.mu.RUnlock()
-		models := make([]map[string]any, 0, len(p.config.Models))
 		if p.db == nil {
-			return map[string]any{"Provider": provider, "Models": models}, nil
+			return map[string]any{"Provider": provider, "Models": []map[string]any{}}, nil
 		}
-		for _, model := range p.config.Models {
+		ids, err := p.catalog.refresh(p.config)
+		if err != nil {
+			return nil, err
+		}
+		models := make([]map[string]any, 0, len(ids))
+		for _, model := range ids {
 			id := provider + "/" + model
 			models = append(models, map[string]any{
 				"ID": id, "Name": id, "Object": "model", "OwnedBy": "openai",

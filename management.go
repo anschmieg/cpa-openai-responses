@@ -77,8 +77,8 @@ func (p *plugin) handleCredential(raw []byte) (any, error) {
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		if p.db == nil || len(p.config.Models) == 0 {
-			return credentialResponse(409, "Save the state file and model list in plugin settings first.", http.Header{}), nil
+		if p.db == nil {
+			return credentialResponse(409, "Save the state file in plugin settings first.", http.Header{}), nil
 		}
 		if err := writeCredential(p.db, p.config, string(plain)); err != nil {
 			return credentialResponse(500, "Could not save the encrypted project key.", http.Header{}), nil
