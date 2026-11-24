@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"strings"
 
 	"github.com/tidwall/gjson"
 	bolt "go.etcd.io/bbolt"
@@ -13,6 +14,7 @@ type provenanceScope struct {
 }
 
 var provenanceBucket = []byte("responses-opaque-v1")
+var responseIDBucket = []byte("responses-ids-v1")
 
 func (s provenanceScope) digest(value string) []byte {
 	h := sha256.New()
@@ -21,6 +23,61 @@ func (s provenanceScope) digest(value string) []byte {
 	h.Write([]byte{0})
 	h.Write([]byte(value))
 	return h.Sum(nil)
+}
+
+func validResponseID(value gjson.Result) bool {
+	id := value.String()
+	return value.Type == gjson.String && id != "" && len(id) <= 512 && strings.TrimSpace(id) == id
+}
+
+func (p *plugin) verifyResponseID(scope provenanceScope, previous gjson.Result) error {
+	if previous.Type == gjson.Null {
+		return nil
+	}
+	if !validResponseID(previous) {
+		return rejected(400, "invalid_previous_response_id", "previous_response_id must be an upstream response ID")
+	}
+	unverified := rejected(400, "unverified_previous_response_id", "previous_response_id was not issued on this Responses route for this caller")
+	if scope.caller == "" {
+		return unverified
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.db == nil {
+		return provenanceUnavailable()
+	}
+	found := false
+	err := p.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(responseIDBucket)
+		found = bucket != nil && bucket.Get(scope.digest(previous.String())) != nil
+		return nil
+	})
+	if err != nil {
+		return provenanceUnavailable()
+	}
+	if !found {
+		return unverified
+	}
+	return nil
+}
+
+func (p *plugin) recordResponseID(scope provenanceScope, response gjson.Result) error {
+	id := response.Get("id")
+	if scope.caller == "" || response.Get("object").String() != "response" || !validResponseID(id) {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.db == nil {
+		return provenanceUnavailable()
+	}
+	return p.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists(responseIDBucket)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(scope.digest(id.String()), []byte{1})
+	})
 }
 
 func requestOpaque(root gjson.Result) ([]string, bool) {

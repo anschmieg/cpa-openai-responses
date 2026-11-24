@@ -25,6 +25,15 @@ When moving a conversation from another route, start fresh or continue it on its
 original route. Keep this provider scoped to the non-Codex clients allowed to
 use the project key. [OpenAI API credits](https://developers.openai.com/api/docs/guides/chatgpt-api-credits#what-the-credits-cover)
 
+`previous_response_id` is optional. Omit it (or send `null`) for requests
+that do not use ID-based continuation. A supplied ID must have been recorded
+from a buffered response or a completed stream on this route under the same
+CPA caller key, upstream URL, and project key. The state database stores only
+ID digests. Start a fresh conversation after changing those keys or URL, losing
+the state file, or upgrading with an older ID the plugin never recorded. This
+check is specific to `previous_response_id`; it does not establish ownership of
+other upstream resource references such as `conversation`.
+
 ## Install and configure
 
 For CPA's Plugin Store, add this registry URL under `plugins.store-sources`:

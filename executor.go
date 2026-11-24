@@ -56,6 +56,11 @@ func (p *plugin) execute(req executorRequest, stream bool) (any, error) {
 	if err := p.record(scope, gjson.GetBytes(resp.Body, "output")); err != nil {
 		return nil, provenanceUnavailable()
 	}
+	if req.Alt == "" {
+		if err := p.recordResponseID(scope, gjson.ParseBytes(resp.Body)); err != nil {
+			return nil, provenanceUnavailable()
+		}
+	}
 	return map[string]any{"Payload": resp.Body, "Headers": responseHeaders(resp.Headers)}, nil
 }
 
@@ -92,6 +97,9 @@ func (p *plugin) prepare(req executorRequest, stream bool) (upstreamRequest, pro
 	}
 	caller, _ := req.Metadata["caller_scope"].(string)
 	scope := provenanceScope{namespace: cfg.namespace, caller: caller}
+	if err := p.verifyResponseID(scope, root.Get("previous_response_id")); err != nil {
+		return upstreamRequest{}, provenanceScope{}, err
+	}
 	if len(opaque) != 0 {
 		if err := p.verify(scope, opaque); err != nil {
 			return upstreamRequest{}, provenanceScope{}, err

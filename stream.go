@@ -140,6 +140,11 @@ func (p *plugin) emitFrame(id streamID, scope provenanceScope, frame, data []byt
 		terminal = true
 		items = event.Get("response.output")
 	}
+	if terminal && event.Get("type").String() == "response.completed" {
+		if err := p.recordResponseID(scope, event.Get("response")); err != nil {
+			return false, provenanceUnavailable()
+		}
+	}
 	if err := p.record(scope, items); err != nil {
 		return false, provenanceUnavailable()
 	}
